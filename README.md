@@ -1,6 +1,9 @@
 # Wordpress installation
 wordpress setup using ansible
 
+> **Student ID:** 59130500137
+> **Name:** Supawit Ruenruetaikul
+
 ## Client Requirement
 - Operating System: centos
 - Ansible
