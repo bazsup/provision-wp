@@ -1,0 +1,5 @@
+db_root_password: abc
+
+wp_db_name: wordpress
+wp_db_user: ansible
+wp_db_password: mypassword

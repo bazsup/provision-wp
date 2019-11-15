@@ -1,0 +1,169 @@
+---
+- name: Wordpress Installation
+  gather_facts: false
+  hosts: all
+  remote_user: root
+  vars:
+    wp_config_sample_path: /var/www/html/wordpress/wp-config-sample.php
+    wp_config_path: /var/www/html/wordpress/wp-config.php
+  tasks:
+    - name: Install packages such as apache, php, mariadb
+      yum:
+        state: present
+        name:
+          - httpd
+          - mariadb
+          - mariadb-server
+          - php
+          - php-common
+          - php-mysql
+          - php-gd
+          - php-xml
+          - php-mbstring
+          - php-mcrypt
+          - php-xmlrpc
+          - unzip
+          - wget
+          - python-pip
+
+    - name: Start Apache and MariaDB service
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - httpd
+        - mariadb
+
+    - name: Allow http firewall
+      firewalld:
+        service: http
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Install PySQL
+      pip:
+        name: pymysql
+
+    - name: Set root password
+      block:
+        - mysql_user:
+            login_user: root
+            login_password:
+            name: root
+            host: localhost
+            password: "{{ db_root_password }}"
+      rescue:
+        - name: Set root password failed
+          debug: msg='root password may already be set'
+
+    - name: Remove anonymous user from database
+      block:
+        - mysql_user:
+            login_user: root
+            login_password: "{{ db_root_password }}"
+            name: ''
+            host_all: yes
+            state: absent
+      rescue:
+        - name: Remove anonymous failed
+          debug: msg='user may already deleted'
+
+    - name: Drop test database and create wp database
+      mysql_db:
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        name: "{{ item.name }}"
+        state: "{{ item.state }}"
+      ignore_errors: yes
+      loop:
+        - {name: 'test', state: 'absent'}
+        - {name: '{{ wp_db_name }}', state: 'present'}
+
+    - name: Create wp db user
+      block:
+        - mysql_user:
+            login_user: root
+            login_password: "{{ db_root_password }}"
+            name: "{{ wp_db_user }}"
+            host: localhost
+            password: "{{ wp_db_password }}"
+            priv: "{{ wp_db_name}}.*:ALL"
+      rescue:
+        - name: Create wp db user failed
+          debug: msg='user {{ wp_db_user }} may already exists'
+      ignore_errors: yes
+
+    - name: Copy secure database script
+      copy:
+        src: secure_db.sql
+        dest: /tmp
+
+    - name: Prepare database table
+      block:
+        - mysql_db:
+            login_user: root
+            login_password: "{{ db_root_password }}"
+            state: import
+            name: all
+            target: /tmp/secure_db.sql
+      rescue:
+        - name: Prepare database table failed
+          debug: msg='failed to create database'
+
+    - name: Download wordpress
+      get_url:
+        url: https://wordpress.org/wordpress-5.0.tar.gz
+        dest: /tmp
+
+    - name: Unzip wordpress and paste to apache html directory
+      unarchive:
+        src: /tmp/wordpress-5.0.tar.gz
+        dest: /var/www/html
+        remote_src: yes
+
+    - name: Change wordpress directory permission
+      file:
+        path: /var/www/html/wordpress
+        owner: apache
+        group: apache
+        mode: '0755'
+
+    - name: Create wordpres uploads directory
+      file:
+        path: /var/www/html/wordpress/wp-content/uploads
+        state: directory
+        group: apache
+
+    - name: Move wp-config file
+      block:
+        - name: Check config sample exists
+          stat:
+            path: "{{ wp_config_sample_path }}"
+          register: stat_sample_config
+        - name: Check wp-config.php exists
+          stat:
+            path: "{{ wp_config_path }}"
+          register: stat_config
+        - name: Create hard link
+          file:
+            src: "{{ wp_config_sample_path }}"
+            dest: "{{ wp_config_path }}"
+            state: hard
+          when: stat_sample_config.stat.exists == True and stat_config.stat.exists == False
+        - name: Remove sample config
+          file:
+            path: "{{ wp_config_sample_path }}"
+            state: absent
+          when: stat_sample_config.stat.exists == True
+
+    - name: Set wp-config
+      lineinfile:
+        path: "{{ wp_config_path }}"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - {regexp: "^define\\('DB_NAME', '(.)+'\\);", line: "define('DB_NAME', '{{ wp_db_name }}');"}
+        - {regexp: "^define\\('DB_USER', '(.)+'\\);", line: "define('DB_USER', '{{ wp_db_user }}');"}
+        - {regexp: "^define\\('DB_PASSWORD', '(.)+'\\);", line: "define('DB_PASSWORD', '{{ wp_db_password }}');"}
